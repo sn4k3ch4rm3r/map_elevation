@@ -4,7 +4,6 @@ import 'dart:math';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/widgets.dart';
 import 'package:latlong2/latlong.dart' as lg;
 
 /// Elevation statefull widget
@@ -15,7 +14,8 @@ class Elevation extends StatefulWidget {
 
   /// Background color of the elevation graph
   final Color? color;
-
+  final Color? foregroundColor;
+  
   /// Elevation gradient colors
   /// See [ElevationGradientColors] for more details
   final ElevationGradientColors? elevationGradientColors;
@@ -24,7 +24,7 @@ class Elevation extends StatefulWidget {
   final Function(BuildContext context, Size size)? child;
 
   Elevation(this.points,
-      {this.color, this.elevationGradientColors, this.child});
+      {this.color, this.elevationGradientColors, this.child, this.foregroundColor});
 
   @override
   State<StatefulWidget> createState() => _ElevationState();
@@ -33,13 +33,29 @@ class Elevation extends StatefulWidget {
 class _ElevationState extends State<Elevation> {
   double? _hoverLinePosition;
   double? _hoveredAltitude;
+  double _totalLength = 0;
 
   @override
   Widget build(BuildContext context) {
+    _totalLength = 0;
+
+    lg.Distance _distance = lg.Distance(roundResult: false);
+
+    for (var i = 1; i < widget.points.length; i++) {
+      _totalLength += _distance.as(
+        lg.LengthUnit.Kilometer,
+        widget.points[i-1],
+        widget.points[i]
+      );
+    }
+
+
     return LayoutBuilder(builder: (BuildContext context, BoxConstraints bc) {
-      Offset _lbPadding = Offset(35, 6);
+      Offset _lbPadding = Offset(40, 17);
       _ElevationPainter elevationPainter = _ElevationPainter(widget.points,
+          totalLength: _totalLength,
           paintColor: widget.color ?? Colors.transparent,
+          axisPaintColor: widget.foregroundColor ?? Colors.black,
           elevationGradientColors: widget.elevationGradientColors,
           lbPadding: _lbPadding);
       return GestureDetector(
@@ -78,49 +94,72 @@ class _ElevationState extends State<Elevation> {
                             bc.maxHeight - _lbPadding.dy))),
               ),
             if (_hoverLinePosition != null)
-              Positioned(
-                left: _hoverLinePosition,
-                top: 0,
-                child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: <Widget>[
-                      Container(
-                        height: bc.maxHeight,
-                        width: 1,
-                        decoration: BoxDecoration(color: Colors.black),
-                      ),
-                      if (_hoveredAltitude != null)
-                        Text(
-                          _hoveredAltitude!.round().toString(),
-                          style: TextStyle(
-                              fontSize: 10, fontWeight: FontWeight.bold),
-                        )
-                    ]),
-              )
+              hoverLine(bc, _lbPadding),
           ]));
     });
+  }
+
+  Size _textSize(String text, TextStyle style) {
+    final TextPainter textPainter = TextPainter(
+        text: TextSpan(text: text, style: style), maxLines: 1, textDirection: TextDirection.ltr)
+      ..layout(minWidth: 0, maxWidth: double.infinity);
+    return textPainter.size;
+  }
+
+  Widget hoverLine(BoxConstraints bc, Offset lbPadding) {
+    String infoText = '${_hoveredAltitude!.round().toString()} m\n${((_hoverLinePosition! - lbPadding.dx)/(bc.maxWidth - lbPadding.dx) * _totalLength).toStringAsFixed(1)} km';
+    TextStyle infoStyle = TextStyle(
+      fontSize: 10,
+      fontWeight: FontWeight.bold,
+      color: widget.foregroundColor,
+    );
+
+    List<Widget> children = [
+      Container(
+        height: bc.maxHeight - lbPadding.dy,
+        width: 1,
+        decoration: BoxDecoration(color: widget.foregroundColor ?? Colors.black),
+      ),
+    ];
+
+    if(_hoveredAltitude != null){
+      children.insert(_hoverLinePosition! < bc.maxWidth - _textSize(infoText, infoStyle).width - 10 ? 1 : 0, Text(infoText, style: infoStyle));
+    }
+
+    return Positioned(
+      left: _hoverLinePosition! - (_hoverLinePosition! < bc.maxWidth - _textSize(infoText, infoStyle).width - 10 ? 0 : _textSize(infoText, infoStyle).width + 2),
+      top: 0,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: children,
+      )
+    );
   }
 }
 
 class _ElevationPainter extends CustomPainter {
   List<ElevationPoint> points;
   late List<double> _relativeAltitudes;
+  double totalLength;
   Color paintColor;
+  Color axisPaintColor;
   Offset lbPadding;
   late int _min, _max;
   late double widthOffset;
   ElevationGradientColors? elevationGradientColors;
 
   _ElevationPainter(this.points,
-      {required this.paintColor,
+      {required this.totalLength,
+      required this.paintColor,
+      required this.axisPaintColor, 
       this.lbPadding = Offset.zero,
       this.elevationGradientColors}) {
     _min = (points.map((point) => point.altitude).toList().reduce(min) / 100)
             .floor() *
         100;
-    _max = (points.map((point) => point.altitude).toList().reduce(max) / 100)
+    _max = (points.map((point) => point.altitude).toList().reduce(max) * 1.1 / 100)
             .ceil() *
-        100;
+        100;  
 
     _relativeAltitudes =
         points.map((point) => (point.altitude - _min) / (_max - _min)).toList();
@@ -136,14 +175,15 @@ class _ElevationPainter extends CustomPainter {
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round
       ..blendMode = BlendMode.src
-      ..style = PaintingStyle.fill
+      ..style = PaintingStyle.stroke
       ..color = paintColor;
     final axisPaint = Paint()
       ..strokeWidth = 2.0
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round
       ..blendMode = BlendMode.src
-      ..style = PaintingStyle.stroke;
+      ..style = PaintingStyle.stroke
+      ..color = axisPaintColor;
 
     if (elevationGradientColors != null) {
       List<Color> gradientColors = [paintColor];
@@ -180,18 +220,21 @@ class _ElevationPainter extends CustomPainter {
       path.lineTo(
           index * widthOffset + lbPadding.dx, _getYForAltitude(altitude, size));
     });
-    path.lineTo(size.width, size.height - lbPadding.dy);
-    path.lineTo(lbPadding.dx, size.height - lbPadding.dy);
+    // path.lineTo(size.width, size.height - lbPadding.dy);
+    // path.lineTo(lbPadding.dx, size.height - lbPadding.dy);
 
     canvas.drawPath(path, paint);
     canvas.drawLine(Offset(lbPadding.dx, 0),
         Offset(lbPadding.dx, size.height - lbPadding.dy), axisPaint);
+    canvas.drawLine(Offset(lbPadding.dx, size.height - lbPadding.dy),
+        Offset(size.width, size.height - lbPadding.dy), axisPaint);
 
     int roundedAltitudeDiff = _max.ceil() - _min.floor();
-    int axisStep = max(100, (roundedAltitudeDiff / 5).round());
+    int yAxisStep = max(25, (roundedAltitudeDiff / 5).round());
+    double xAxisStep = max(1, (totalLength / 5).round().toDouble());
 
-    List<double>.generate((roundedAltitudeDiff / axisStep).round(),
-        (i) => (axisStep * i + _min).toDouble()).forEach((altitude) {
+    List<double>.generate((roundedAltitudeDiff / yAxisStep).round(),
+        (i) => (yAxisStep * i + _min).toDouble()).forEach((altitude) {
       double relativeAltitude = (altitude - _min) / (_max - _min);
       canvas.drawLine(
           Offset(lbPadding.dx, _getYForAltitude(relativeAltitude, size)),
@@ -199,12 +242,28 @@ class _ElevationPainter extends CustomPainter {
           axisPaint);
       TextPainter(
           text: TextSpan(
-              style: TextStyle(color: Colors.black, fontSize: 10),
-              text: altitude.toInt().toString()),
+              style: TextStyle(color: axisPaintColor, fontSize: 10),
+              text: '${altitude.toInt().toString()} m'),
           textDirection: TextDirection.ltr)
         ..layout()
         ..paint(
             canvas, Offset(5, _getYForAltitude(relativeAltitude, size) - 5));
+    });
+
+    List<double>.generate((totalLength / xAxisStep).ceil(),
+        (i) => (xAxisStep * i)).forEach((distance) {
+      canvas.drawLine(
+          Offset(_getXForDistance(distance, size), size.height - lbPadding.dy),
+          Offset(_getXForDistance(distance, size), size.height - lbPadding.dy - 10),
+          axisPaint);
+      TextPainter(
+          text: TextSpan(
+              style: TextStyle(color: axisPaintColor, fontSize: 10),
+              text: '${distance.toStringAsFixed(0)}  km'),
+          textDirection: TextDirection.ltr)
+        ..layout()
+        ..paint(
+            canvas, Offset(_getXForDistance(distance, size) -1.5, size.height - 10));
     });
 
     canvas.restore();
@@ -215,6 +274,8 @@ class _ElevationPainter extends CustomPainter {
 
   double _getYForAltitude(double altitude, Size size) =>
       size.height - altitude * size.height - lbPadding.dy;
+  double _getXForDistance(double distance, Size size) =>
+      distance * ((size.width-lbPadding.dx)/totalLength) + lbPadding.dx;
 
   ElevationPoint? getPointFromPosition(double position) {
     int index = ((position - lbPadding.dx) / widthOffset).round();
